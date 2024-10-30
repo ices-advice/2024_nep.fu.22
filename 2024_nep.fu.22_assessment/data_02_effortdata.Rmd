@@ -1,0 +1,125 @@
+---
+title: "data_02_exploration of Irish effort data"
+author: "WGCSE"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, echo=TRUE, warning=FALSE}
+gc()
+rm(list=ls())
+
+library(RODBC)
+library(tidyverse)
+library(lattice)
+library(lubridate)
+library(mapplots)
+library(sp)
+library(sf)
+library(reshape2)
+library(readxl)
+library(knitr)
+library(DataCombine)
+library(lattice)
+library(icesTAF)
+library(magrittr)
+library(viridis)
+library(sessioninfo)
+library(stringr)
+```
+
+# Setup options
+
+```{r setupoptions}
+curr.year <- 2024
+dat.year <- curr.year -1
+fu.n <- "FU22"
+
+```
+
+# Introduction
+
+The goals of this R Markdown document are to:
+
+* Plot Irish effort data
+* Write TAF data tables
+
+Files before (inside "bootstrap/data/effort"):
+
+  * nep.fu.22.effort.acessions.csv
+  * Number of vessel by year and FU.csv
+ 
+
+Files after (inside "data/data_02_irish_effortdata"):
+
+* FU22_effort_Kwdays.png
+* FU22_vessel_number.png
+
+
+# Data Work Up
+<a href="#top">Back to top</a>
+
+This Rmarkdown document plots the effort data and number of vessels.
+
+
+## Load Irish effort data and plot
+<a href="#top">Back to top</a>
+
+Load in  data series 2005-2023.Aggregated data set.
+This is calculated and held on national network add next year data to the file.
+WGCSE 2015 recommended that effort data in Kw days should be presented as these data are more informative than effort data uncorrected for vessel power.
+Effort for Irish directed fleet (30% landings threshold).
+
+```{r data eff, echo=TRUE, fig.height=7, fig.width=10, warning=FALSE, fig.cap="FU22 Irish Effort (Kw days) by year."}
+#historic aggregated data SALY
+
+eff <- read.csv("bootstrap/data/effort/nep.fu.22.effort.accessions.csv")
+
+
+neffplot <- ggplot(eff, aes(Year, kwdays)) + geom_line(size = 1) + theme_bw() +
+             ylab("Effort in kW days ") + 
+            coord_cartesian(ylim= c(0, 1300), xlim=c(1995,dat.year))
+
+neffplot + theme(axis.text=element_text(size=10),axis.title=element_text(size=10)) + 
+  theme(legend.title=element_blank(), panel.grid=element_blank())
+
+ggsave("data/data_02_irish_effortdata/FU22_effort_Kwdays.png")
+
+knitr::kable(eff , digits=3)
+```
+
+
+
+## Load Number of vessels reporting landings > 10 tonnes.
+<a href="#top">Back to top</a>
+
+```{r data ves, echo=TRUE, fig.height=7, fig.width=10, warning=FALSE, fig.cap="FU22 Number of vessels with landings > 10 t."}
+
+ves <- read.csv("bootstrap/data/effort/Number of vessel by year and FU.taf.csv")
+
+ves <- ves %>% filter(FU =='22')
+
+vesplot <- ggplot(ves, aes(year, Number_of_Vessels)) + geom_line(size = 1) + theme_bw() +
+             ylab("Number of vessels with landings > 10 t ") + 
+            coord_cartesian(ylim= c(0, 80), xlim=c(1995,dat.year))
+
+vesplot + theme(axis.text=element_text(size=12),axis.title=element_text(size=12)) + 
+  theme(legend.title=element_blank(), panel.grid=element_blank())
+
+ggsave("data/data_02_irish_effortdata/FU22_number_vessels.png")
+```
+
+
+

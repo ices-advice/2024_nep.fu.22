@@ -1,0 +1,672 @@
+---
+title: "model_02_Kriging UWTV survey data"
+author: "WGCSE"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r libs, message=FALSE, echo=TRUE, warning=FALSE}
+gc()
+rm(list=ls())
+
+library(RODBC)
+library(tidyverse)
+library(lattice)
+library(lubridate)
+library(mapplots)
+library(sp)
+library(sf)
+library(reshape2)
+library(readxl)
+library(knitr)
+library(DataCombine)
+library(lattice)
+library(icesTAF)
+library(magrittr)
+library(viridis)
+library(sessioninfo)
+library(stringr)
+library(RColorBrewer) 
+
+
+library(RGeostats)
+library(maps)
+library(mapproj)
+.Last.projection=list(active=F,projection="mean",parameters=NULL,orientation=NULL)
+library(fields)
+
+```
+
+# Setup options
+
+```{r setupoptions}
+curr.year <- 2024
+dat.year <- curr.year -1
+fu.n <- "FU22"
+
+save.plots <- T # set it up as T or F whether you want to save the plots when running all the chunks or kniting the document
+save.tables <- T # set it up as T or F whether you want to save the tables "propmature"" and the "L50" into .txt files when running all the chunks or knitting the document
+```
+
+
+# Introduction
+
+The goals of this R Markdown document are to:
+
+* Kriging analysis of UWTV survey data using RGeostats package.  
+* Write TAF data tables
+
+Files before (inside "model/UWTV"):
+
+* europa.txt
+* pol.Smalls.csv
+* nep22_2006_2024_densities.csv
+* ggins_compiled_Smalls_contourplot.csv
+* fu22.uwtv.summary.statistics.csv
+
+
+
+
+Files before (inside "bootstrap/data/shp):
+
+* nep.22.ground.shp
+
+
+Files after (inside "model_02"):
+
+* fu22.uwtv.summary.statistics.adg.csv
+* ggin2024.csv
+* FU22_Number UWTV Stations.png
+* FU22_Abundance_estimates.png
+* FU22_meandensity.png
+* FU22_cvgeo.png
+* FU22_violin.plot.density.png
+* FU22_violin.plot.counts.png
+* FU22_violin.plot.distanceoverground.png
+* FU22_contour.plot.png
+
+# Data Work Up
+<a href="#top">Back to top</a>
+
+This markdown document contains the full kriging procedure for the Smalls ground from `dat.year`.
+kriging is carried out using  RGeostats package from MINES ParisTech - Fontainebleau - France.
+Download here: http://rgeostats.free.fr/download.php
+
+The final result is the UWTV abundance estimates summary which forms part of the input data for generating catch advice in the Autumn.
+Outputs various report figures and tables.
+
+Marine Institute UWTV survey reports are available @ https://oar.marine.ie/handle/10793/1658.
+
+The Working Group on Nephrops Surveys (WGNEPS) is the international coordination group for Nephrops underwater television and trawl surveys within ICES @ https://www.ices.dk/community/groups/Pages/WGNEPS.aspx
+
+
+## Copy other data from bootstrap/data/ 
+```{r copy_data , echo=TRUE, warning=FALSE, fig.height=8, fig.width=8}
+cp("bootstrap/data/UWTV/fu22.uwtv.summary.statistics.csv", "model/UWTV/fu22.uwtv.summary.statistics.csv")
+
+cp("bootstrap/data/UWTV/pol.Smalls.csv", "model/UWTV/pol.Smalls.csv")
+cp("bootstrap/data/UWTV/europa.txt", "model/UWTV/europa.txt")
+
+cp("bootstrap/data/UWTV/nep22_2006_2024_densities.csv", "model/UWTV/nep22_2006_2024_densities.csv") 
+cp("bootstrap/data/UWTV/ggins_compiled_Smalls_contourplot.csv", "model/UWTV/ggins_compiled_Smalls_contourplot.csv") 
+
+cp("bootstrap/data/shp", "model/")
+```
+
+<a href="#top">Back to top</a>
+
+
+
+## Load the UWTV survey abundance data and subset for assessment year. 
+<a href="#top">Back to top</a>
+
+The data is available only in MI SQL database and it is extracted as a data object.
+
+```{r data, echo=TRUE, message=FALSE, fig.cap="UWTV survey datapoints plot."}
+
+nep.all <- read.csv("model/UWTV/nep22_2006_2024_densities.csv")
+
+nep <- subset(nep.all, Year==2024 & Ground=="Smalls")
+nep <- nep[, c("Year", "Ship_Mid_Longitude", "SHIP_Mid_Latitude", "AdjustedBurrowDensity")]
+
+```
+
+## Data QC
+
+### Violin  plots Density
+<a href="#top">Back to top</a>
+May move this to report section
+
+```{r violin1, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Violin Plot."}
+
+v <- ggplot(nep.all, aes(x=as.factor(Year),y=AdjustedBurrowDensity))+ 
+  geom_violin(aes(group=Year,colour=Year,fill=Year),alpha=0.5, 
+              kernel="rectangular")+           # passes to stat_density, makes violin rectangular 
+  geom_boxplot(aes(group=Year), width=.2)+    
+  stat_summary(fun.y=mean, geom="line", colour="blue", aes(group=1)) +
+  xlab("Year")+                                # label one axis
+  ylab("Density burrow/m-2")+                       # label the other
+  theme_bw()+                                  # make white background on plot
+  theme(legend.position = "none")              # suppress legend
+
+v + theme(axis.title.x=element_text(size=10),
+          axis.title.y=element_text(size=10))
+if (save.plots == T) {
+ggsave("model/model_02_kriging/FU22_violin.plot.density.png")
+}
+```
+
+### Violin  plots Counts
+
+May move this to report section
+
+```{r violin2, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Violin Plot."}
+
+v <- ggplot(nep.all, aes(x=as.factor(Year),y=NephropsBurrowCount))+ 
+  geom_violin(aes(group=Year,colour=Year,fill=Year),alpha=0.5, 
+              kernel="rectangular")+           # passes to stat_density, makes violin rectangular 
+  geom_boxplot(aes(group=Year), width=.2)+    
+  stat_summary(fun.y=mean, geom="line", colour="blue", aes(group=1)) +
+  xlab("Year")+                                # label one axis
+  ylab("Density burrow/m-2")+                       # label the other
+  theme_bw()+                                  # make white background on plot
+  theme(legend.position = "none")              # suppress legend
+
+v + theme(axis.title.x=element_text(size=10),
+          axis.title.y=element_text(size=10))
+
+if (save.plots == T) {
+ggsave("model/model_02_kriging/FU22_violin.plot.counts.png")
+}
+```
+
+
+### Violin  plots DistanceOverGround
+
+May move this to report section
+
+```{r violin3, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Violin Plot."}
+
+v <- ggplot(nep.all, aes(x=as.factor(Year),y=DistanceOverGround))+ 
+  geom_violin(aes(group=Year,colour=Year,fill=Year),alpha=0.5, 
+              kernel="rectangular")+           # passes to stat_density, makes violin rectangular 
+  geom_boxplot(aes(group=Year), width=.2)+    
+  stat_summary(fun.y=mean, geom="line", colour="blue", aes(group=1)) +
+  xlab("Year")+                                # label one axis
+  ylab("Density burrow/m-2")+                       # label the other
+  theme_bw()+                                  # make white background on plot
+  theme(legend.position = "none")              # suppress legend
+
+v + theme(axis.title.x=element_text(size=10),
+          axis.title.y=element_text(size=10))
+
+if (save.plots == T) {
+ggsave("model/model_02_kriging/FU22_violin.plot.dog.png")
+}
+
+```
+
+### DOG source, FOV multiplier Check.
+
+```{r check, echo=FALSE}
+
+table(nep.all$Year, nep.all$DistanceSource, nep.all$FOVMultiplier)
+```
+<a href="#top">Back to top</a>
+
+
+
+
+
+## create a RGeosStat database and plot the data to check it.
+<a href="#top">Back to top</a>
+
+```{r db, echo=TRUE, message=FALSE, fig.cap="UWTV survey datapoints plot."}
+surv.yr<- mean(nep$Year)
+mt <- paste(surv.yr, "nep.fu.22")
+data.db <- db.create(nep,flag.grid=FALSE,ndim=2,autoname=F)
+# Data management (define lat/lon)
+data.db<- db.locate(data.db,3:4,loctype="x")
+# Data management (define density)
+data.db <- db.locate(data.db,5,loctype="z")
+projec.define(projection="mean",db=data.db)
+projec.toggle(mode=0)
+
+  #png("model/model_02_kriging/FU22_krig.datapoints.png", height=2000, width=1500, res=200)
+plot(data.db,title=mt)
+  #dev.off()
+```
+
+
+
+
+## Define the survey domain
+<a href="#top">Back to top</a>
+
+ Load a polygon and create polygon structure.
+ The same polygon is used for all years.
+ 
+```{r poly, echo=T, message=FALSE, fig.cap=" UWTV survey domain plot."}
+
+  #png("model/model_02_kriging/FU22_krig.surveydomain.png", height=2000, width=1500, res=200)
+
+pol.FU22 <- read.table("model/UWTV/pol.Smalls.csv",header=T, sep=",")
+poly <- polygon.create(x=pol.FU22$x,y=pol.FU22$y)
+plot(poly)
+plot(data.db,main=mt, add=T)
+db.poly<-polygon.create(x=pol.FU22[,1],y=pol.FU22[,2],polygon=NA)
+europa <- read.table("model/UWTV/europa.txt",header=T)
+plot(data.db,pch=21, title = mt,inches=5,asp=1/cos(mean(db.extract(data.db,"x1"))*pi/180),xlim=c(-6.8,-5.7),
+     ylim=c(50.8,51.7))
+plot(poly,add=T)
+polygon(europa);box()
+
+  #dev.off()
+
+```
+
+
+## Visualizing the data set in projected space based on the mean of the points.
+<a href="#top">Back to top</a>
+
+Then checking the data points that fall inside and outside the polygon.
+ 
+```{r project, echo=TRUE, message=FALSE, fig.cap="Projected space and check datapoints inside survey domain plot"}
+
+projec.define(projection="mean",db=data.db)
+projec.toggle(mode=1)
+
+  #png("model/model_02_kriging/FU22_krig.polygon.check.png", height=2000, width=1500, res=200)
+  plot(data.db,pch=21,title= mt,inches=5,asp=1,xlim=c(-25,25),ylim=c(-25,25))
+plot(poly,add=T)
+europa.p<-projec.operate(x=europa$x,y=europa$y)
+polygon(europa.p,col=8);box()
+  #dev.off()
+  
+db.c1 <- data.db
+# select points inside polygon
+db.c1 = db.polygon(db.c1,db.poly)
+cat("nb points: ",db.c1$nech," ; outside polygon: ",sum(!db.c1@items$Polygon),"\n")
+```
+
+
+## Calculate summary statistics inside the polygon.
+<a href="#top">Back to top</a>
+
+Histogram of mean, variance of desnity data inside polygon
+ 
+```{r summary_stats, echo=TRUE, fig.cap="Histogram of adjusted densities."}
+
+# mean, variance, histogramme of data inside polygon
+zm<-mean(db.c1[,5][db.c1[,6]],na.rm=T) 
+zv<-var(db.c1[,5][db.c1[,6]],na.rm=T)*(sum(db.c1[,6],na.rm=T)-1)/sum(db.c1[,6],na.rm=T)
+cat("mean: ",zm,"    var: ",zv,"   cv: ",sqrt(zv)/zm,"\n")
+
+  #png("model/model_02_kriging/FU22_krig.hist.densities.png", height=2000, width=1500, res=200)
+hist(db.c1[,5][db.c1[,6]],nclass=15,xlab="burrow density n/m2",main=mt)
+  #dev.off()
+  
+```
+
+
+
+##Set up the experimental variogram and plotting the points.
+<a href="#top">Back to top</a>
+
+Fitting an experimental variogram to the pairs.
+ 
+```{r fitting_vario, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Fitted variogram."}
+
+Lag=2.2; Nlag=10
+vg1=vario.calc(db.c1,lag=Lag, nlag=Nlag)
+
+vario.plot(vg1,npairpt=1,xlab="Distance",ylab="Variogram",pch=9,cex=0.001,col="grey", title=mt)
+  
+    #png("model/model_02_kriging/FU22_krig.vg.fit.png", height=2000, width=1500, res=200)
+  vg.fit=model.auto(vg1,struc=c("Exponential"),title = paste(mt, "auto fit Exponential"), xlab="Distance", ylab="variogram")
+    #dev.off()
+    
+vg.fit
+```
+
+
+## Gridding data set
+<a href="#top">Back to top</a>
+
+This step involves making a grid of points within the domain area.  
+This grid is used for the modelled surface.  
+A grid of 100X100 points was chosen because it was similiar to the previous methodology used in SURFER.
+The grid is plotted along with the domain boundary and bubbles of density.
+ 
+```{r making_grid, echo=TRUE, message=TRUE, fig.cap="Gridded data plot."}
+poldat<-read.table("model/UWTV/pol.Smalls.csv",header=T,sep=',')
+
+gnx=100;gny=100
+gx0=min(poldat$x); gx1=max(poldat$x)
+gy0=min(poldat$y); gy1=max(poldat$y)
+gdx=(gx1-gx0)/gnx; gdy=(gy1-gy0)/gny
+gd.disc=db.create(flag.grid=T,x0=c(gx0,gy0),dx=c(gdx,gdy),nx=c(gnx,gny))
+gd.disc=db.polygon(gd.disc,db.poly)
+
+  #png("model/model_02_kriging/FU22__krig.grid.data.png", height=2000, width=1500, res=200)
+  plot(gd.disc,pch=3, col=1, xlim=c(-25,25),ylim=c(-25,25),title=mt);plot(db.c1,add=T,pch=21); plot(db.poly,add=T)
+  #dev.off()
+```
+
+
+## Calculate mean burrow density and geostistical CV for the grid.
+<a href="#top">Back to top</a>
+
+This mean and CV is different to the krigging estimates calculated later but they should be fairly close for this type of dataset.
+
+```{r CV_calcs, echo=TRUE, message=TRUE, eval=TRUE}
+# calculation of CVV
+cvv=model.cvv(polygon=db.poly,model=vg.fit,ndisc=c(gnx,gny))
+# Global estimate = arithmetic mean. s2est=cvv+cxx-2*cxv
+cxx=model.cxx(db1=db.c1,model=vg.fit)
+cxv=model.cxv(db=db.c1,polygon=db.poly,model=vg.fit,ndisc=c(gnx,gny))
+sse=sqrt(cvv+cxx-2*cxv)
+cat("arith.mean: ",round(zm,5)," CV.geo: ",round(sse/zm,5),"\n")
+```
+
+## Kriging Model
+<a href="#top">Back to top</a>
+
+Here we carry out the kriging using the fitted variogram.
+Neighbourhood weighting is not needed given the properties of this data set (i.e. <50 observations which are fairly homogoneous and strongly auto-corellated).
+
+```{r krige_model, echo=TRUE, message=TRUE, eval=TRUE}
+global.ma=global(dbin=db.c1, dbout=gd.disc, model = vg.fit, uc=c("1"), polygon = db.poly, calcul = "krige", 
+                 flag.polin=T, flag.wgt=F, ivar = 1, verbose = 1)
+
+toto <- db.create(x1=pol.FU22[,1],x2=pol.FU22[,2])
+grid <- db.grid.init(toto,nodes=100) # number of nodes if related with the fining of the grid
+#when using all data as neighbours
+uniquenei <- neigh.create(2,0)
+
+kri <- kriging(dbin=db.c1,db.polygon(grid,poly),vg.fit,uniquenei)
+
+ggin <- as.data.frame(kri@items)
+
+#write.csv(ggin, file= paste0("model/model_02_kriging/ggin",surv.yr,".csv"))
+```
+ 
+### Kriging Model Plot1
+<a href="#top">Back to top</a>
+
+The krigged surface and the error structure is plotted and the grid is saved for plotting purposes later.
+
+```{r krige_res1, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Kriged Density Adjusted.estimated."}
+
+  #png("model/model_02_kriging/FU22_krig.estimation.png", height=2000, width=1500, res=200)
+
+plot(kri,col=tim.colors(200),asp=1,xlim=c(-15,15),ylim=c(-21,20),name.image="Kriging.AdjustedBurrowDensity.estim")
+plot(poly,add=T)
+plot(db.c1,col='black',add=T)
+  #dev.off()
+```  
+
+ 
+### Kriging Model Plot2
+<a href="#top">Back to top</a>
+
+map of the estimation variance
+The krigged surface and the error structure is plotted and the grid is saved for plotting purposes later.
+```{r krige_res2, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Kriged Density Adjusted.standard deviation."} 
+
+  #png("model/model_02_kriging/FU22_krig.stdev.png", height=2000, width=1500, res=200)
+
+plot(kri,col=tim.colors(10),name.image="Kriging.AdjustedBurrowDensity.stdev") 
+plot(poly, add=T)
+plot(db.c1,col=1,add=T)
+  
+  #dev.off()
+```
+
+ 
+
+## UWTV Survey Summary Statistics
+<a href="#top">Back to top</a>
+
+The mean z estimate from kriging is multiplied by the polygon surface `r poly$surface*1.852^2`km^2^ to calculate the total abundance.
+The summary object contains all the salient infomation for the final results.
+
+The historical UWTV survey summary file is loaded.
+
+```{r krige_summ, echo=TRUE, message=TRUE, eval=TRUE}
+
+#Survey abundance estimate in numbers (millions) 
+abun <- global.ma$zest*poly$surface*1.852^2
+
+#read in summary file from previous years, as in years from 2002 to 2014 surfer was used to krig, and EVA program outputed survey cv.
+k.sum <- read.csv("model/UWTV/fu22.uwtv.summary.statistics.csv")
+
+
+
+k.sum <-rbind(k.sum, data.frame(Year=mean(nep$Year), Ground ="Smalls", mean= zm,  N= db.c1$nech,  
+                   sd = zv/zv^.05, se= sse, ciMult=NA, 
+                   ci= abun*global.ma$cv*1.96, 
+                   area= poly$surface*1.852^2, abund = abun, 
+                   upper= abun+abun*global.ma$cv*1.96, 
+                   lower= abun-abun*global.ma$cv*1.96, 
+                   CViid= zv/zm, meanGeo=  global.ma$zest, CVgeo= global.ma$cv, method="r-geostats"))
+
+
+write.csv(k.sum, "model/model_02_kriging/fu22.uwtv.summary.statistics.adg.csv",  sep=",", row.names = F)
+
+knitr::kable(k.sum[,1:9] )
+knitr::kable(k.sum[,c(1:2, 10:16)])
+```
+
+
+
+### The final check is a cross validation plot.
+<a href="#top">Back to top</a>
+
+```{r cross_val, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Cross validation plot."}
+data.db <- xvalid(db.c1,model=vg.fit,uniquenei)
+
+  #png("model/model_02_kriging/FU22_krig.crossval.png", height=2000, width=1500, res=200)
+  
+hist(db.extract(data.db,"Xvalid.AdjustedBurrowDensity.esterr"),nclass=30,main="nep.fu.22.CrossValidation",xlab="Cross validation error",col="blue")
+
+  #dev.off()
+```
+
+
+
+## Summary plots of the UWTV survey results over time.
+<a href="#top">Back to top</a>
+
+### Number of Stations completed
+```{r final_res1, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Number of UWTV survey stations."}
+
+  ggplot(k.sum, aes(x=Year,y=N)) + geom_line(size=1) +  geom_point() +        
+    theme_bw() +
+          scale_x_continuous(name="\nYear",
+                             breaks = seq(min(k.sum$Year), max(k.sum$Year), 1)) +
+          scale_y_continuous(name = "Number of Stations \n",
+                             breaks = seq(0, max(k.sum$N)+10, 10),
+                             limits = c(0, max(k.sum$N)+10)) +
+          theme(panel.grid=element_blank(), legend.position = "bottom")  +
+          theme(legend.title=element_blank())  
+
+if (save.plots == T) {
+ggsave("model/model_02_kriging/FU22_Number UWTV Stations.png")
+}
+```
+
+
+### Abundance estimate (millions individuals)
+WKFMSY Btrigger estimated in 2016.
+
+```{r final_res2, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Abundance estimate (millions of individuals)."}
+
+ggplot(k.sum, aes(x=Year, y= abund)) +
+          theme_bw() +
+          geom_errorbar(aes(ymax=upper, ymin=lower, width=0.25)) +
+          geom_line(size = 1) +
+          geom_point() +
+          theme(panel.grid = element_blank()) +
+          scale_x_continuous(name="\nYear",
+                             breaks = seq(min(k.sum$Year), max(k.sum$Year), 1)) +
+          scale_y_continuous(name = "Abundance (millions)\n",
+                             breaks = seq(0, max(k.sum$upper)+100, 250),
+                             limits = c(0, max(k.sum$upper)+100)) + 
+          geom_hline(aes(yintercept=990),colour="#990000",linetype="dashed",size = 0.9) 
+
+if (save.plots == T) {
+ggsave("model/model_02_kriging/FU22_Abundance_estimates.png")
+}
+
+```
+
+  
+### Uncertainty estimate
+
+```{r final_res3, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Uncertainty estimate. Dashed line is 20% limit."}
+
+  #png("model/model_02-kriging/FU22_UWTV Uncertainty Estmate.png", height=2000, width=1500, res=200)  
+
+ggplot(k.sum, aes(x=Year, y= CVgeo)) +
+          theme_bw() +
+          geom_line(size = 1) +
+          geom_point() +
+          theme_bw() +
+          geom_hline(aes(yintercept=0.20),colour="black",linetype="dashed",size = 0.5) +
+          scale_x_continuous(name="\nYear",
+                             breaks = seq(min(k.sum$Year), max(k.sum$Year), 1)) +
+          scale_y_continuous(name = "CV Geo",
+                             breaks = seq(0, max(k.sum$CVgeo)+0.15, 0.01),
+                             limits = c(0, max(k.sum$CVgeo)+0.15))  +
+          theme(panel.grid=element_blank(), legend.position = "bottom")  +
+          theme(legend.title=element_blank())  
+  #dev.off()
+
+if (save.plots == T) {
+ggsave("model/model_02_kriging/FU22_uncertainty_estimate.png")
+}
+```
+
+
+### Mean Density estimate (burrow/m2)
+
+```{r final_res4, echo=TRUE, message=TRUE, eval=TRUE, fig.cap="Mean density estimate (burrow/m2)."}
+  #png("model/model_02_kriging/FU22_UWTV Mean Density.png", height=2000, width=1500, res=200)  
+
+ggplot(k.sum, aes(x=Year, y= mean)) +
+          theme_bw() +
+          geom_line(size = 1) +
+          geom_point() +
+          theme_bw() +
+          scale_x_continuous(name="\nYear",
+                             breaks = seq(min(k.sum$Year), max(k.sum$Year), 1)) +
+          scale_y_continuous(name = "Mean Density (burrow/m-2)",
+                             breaks = seq(0, max(k.sum$mean)+0.3, 0.1),
+                             limits = c(0, max(k.sum$mean)+0.3))  +
+          theme(panel.grid=element_blank(), legend.position = "bottom")  +
+          theme(legend.title=element_blank())  
+
+if (save.plots == T) {
+ggsave("model/model_02_kriging/FU22_meandensity.png")
+}
+```
+
+
+### Krigged contour plots over time.
+<a href="#top">Back to top</a>
+
+GGins are compiled from previous files.
+
+```{r contour, echo=TRUE, message=TRUE, eval=TRUE, fig.height=10, fig.width=8, fig.cap="Kriged contour and density bubble plot."}
+
+ggin <- read.csv("model/UWTV/ggins_compiled_Smalls_contourplot.csv")
+
+shapefile_path_FG <- "C:/GitHub/2024_nep.fu.22_assessment/model/shp/nep.22.ground.shp"
+file.exists(shapefile_path_FG)
+FG <- st_read(shapefile_path_FG)
+print(FG)
+
+##data checks for station spacing
+ggin$Density[is.na(ggin$Density)==T]
+ggin$Density[ggin$Density<0]<-0.0
+range(ggin$Density)
+range(ggin$longitude)
+range(ggin$latitude)
+
+#station spacing
+x <- sort(unique(ggin$longitude))
+y <- sort(unique(ggin$latitude))
+summary(head(x, -1) - tail(x, -1))
+summary(head(y, -1) - tail(y, -1))
+
+
+latlimits <- c(50.8, 51.7) 
+longlimits <- c(-6.9, -5.7)
+
+
+ p <- 
+   ggplot(data = FG) +
+   geom_sf(fill = "lightgrey", color = "darkgrey", size = 0.5) +  # Customize fill and border color
+   geom_tile(data = subset(ggin, Polygon == TRUE), 
+            aes(x = round(longitude, 2), 
+                y = round(latitude, 2), 
+                fill = Density)) +
+   scale_fill_gradientn(colours = brewer.pal(9, "YlOrRd"), guide = "legend") +
+   theme_bw() +
+   coord_sf(xlim = longlimits, ylim = latlimits) +  # Use coord_sf for spatial data
+   scale_x_continuous(labels = function(x) paste0(abs(x), "°")) + # Remove "W", keep degree symbol
+   scale_y_continuous(labels = function(y) paste0(abs(y), "°")) +
+   labs(y = "Latitude", x = "Longitude") +
+   facet_wrap(~year, nrow = 5)  # Facet by year
+ 
+ 
+
+surv <- nep.all
+names(surv)[2] <- "year"
+names(surv)[12] <- "mid_lon"
+names(surv)[13] <- "mid_lat"
+names(surv)[21] <- "Density"
+
+b <- geom_point(data=surv, aes(x=mid_lon, y=mid_lat, size=Density), shape =1)
+
+f <- p + b
+
+
+
+f + theme(axis.title.x=element_text(size=12, margin = margin(t = 15)),
+          axis.text=element_text(size=10),
+          axis.title.y=element_text(size=12, margin = margin(r = 20)),
+          strip.text.x=element_text(size=10),
+          legend.title = element_text(size=10),
+          legend.text=element_text(size=4),
+          legend.key.size = unit(1, "cm"))
+
+
+
+
+ggsave("model/model_02_kriging/FU22_contour.plot.png")
+
+```
+
+<a href="#top">Back to top</a>
+
+## Session
+<a href="#top">Back to top</a>
+```{r info , echo=TRUE, warning=FALSE, fig.height=8, fig.width=8}
+session_info()
+
+```
